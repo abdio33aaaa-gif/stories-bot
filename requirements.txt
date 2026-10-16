@@ -1,4 +1,5 @@
+
 pyTelegramBotAPI
-flask
+Flask
 requests
-yt-dlp[default,curl-cffi]
+yt-dlp
