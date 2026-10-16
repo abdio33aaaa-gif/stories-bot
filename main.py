@@ -1,110 +1,400 @@
-import os, threading, requests, yt_dlp
+
+import os
+import glob
+import threading
+import tempfile
+from urllib.parse import urlparse
+
+import requests
+import yt_dlp
 import telebot
 from flask import Flask
 
-TOKEN = os.getenv("BOT_TOKEN") # توكن @Storiesa6d_bot
+# =========================
+# إعدادات البوت
+# =========================
+
+TOKEN = os.getenv("BOT_TOKEN")
+
 CHANNEL = "@BotKanal24"
 CHANNEL_LINK = "https://t.me/BotKanal24"
+
+if not TOKEN:
+    raise RuntimeError("Missing BOT_TOKEN environment variable")
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# إعدادات التحميل
-YDL_OPTS_VIDEO = {
-    'format': 'best',
-    'noplaylist': True,
-    'quiet': True,
-    'no_warnings': True,
-    'outtmpl': '/tmp/%(id)s.%(ext)s',
+# الحد التقريبي لحجم الفيديو المرفوع عبر Bot API
+MAX_UPLOAD_SIZE = 49 * 1024 * 1024
+
+ALLOWED_DOMAINS = {
+    "tiktok.com",
+    "instagram.com",
+    "facebook.com",
+    "fb.watch",
 }
 
-def expand_url(short_url):
-    """حل مشكلة vm.tiktok.com يلي بالصورة"""
-    try:
-        r = requests.get(short_url, allow_redirects=True, timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
-        return r.url
-    except:
-        return short_url
+VIDEO_EXTENSIONS = {
+    ".mp4", ".mkv", ".webm", ".mov", ".m4v"
+}
 
-@app.route('/')
-def home():
-    return "Storiesa6d_bot is Running!"
+# أفضل جودة متاحة بملف واحد، مع تفضيل MP4
+YDL_OPTS_VIDEO = {
+    "format": "best[ext=mp4]/best",
+    "noplaylist": True,
+    "quiet": True,
+    "no_warnings": True,
+    "outtmpl": "%(id)s.%(ext)s",
+    "restrictfilenames": True,
+    "socket_timeout": 30,
+    "retries": 2,
+    "fragment_retries": 2,
+}
+
+
+# =========================
+# التحقق من الروابط
+# =========================
+
+def is_supported_url(url):
+    try:
+        parsed = urlparse(url)
+
+        if parsed.scheme not in ("http", "https"):
+            return False
+
+        host = (parsed.hostname or "").lower()
+
+        return any(
+            host == domain or host.endswith("." + domain)
+            for domain in ALLOWED_DOMAINS
+        )
+    except Exception:
+        return False
+
+
+def expand_url(url):
+    """توسيع روابط TikTok القصيرة عند الحاجة."""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+
+        if host not in {"vm.tiktok.com", "vt.tiktok.com"}:
+            return url
+
+        response = requests.get(
+            url,
+            allow_redirects=True,
+            stream=True,
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+
+        try:
+            final_url = response.url
+        finally:
+            response.close()
+
+        if is_supported_url(final_url):
+            return final_url
+
+        return url
+
+    except requests.RequestException:
+        return url
+
+
+# =========================
+# الاشتراك بالقناة
+# =========================
 
 def is_subscribed(user_id):
     try:
-        status = bot.get_chat_member(CHANNEL, user_id).status
-        return status in ['member', 'administrator', 'creator']
-    except Exception:
-        return True # اذا البوت مو أدمن بالقناة
+        member = bot.get_chat_member(CHANNEL, user_id)
 
-@bot.message_handler(commands=['start'])
-def start(m):
-    if not is_subscribed(m.from_user.id):
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("📢 اشترك في القناة", url=CHANNEL_LINK))
-        markup.add(telebot.types.InlineKeyboardButton("✅ تحققت", callback_data="check_sub"))
-        bot.send_message(m.chat.id, f"🚀 لحمل ستوري انستا + تيك توك بدون علامة\n\n⚠️ يجب ان تشترك اولاً في قناتنا الرسمية:\n{CHANNEL}\n\nاشترك وبعدها اضغط تحققت", reply_markup=markup)
-        return
-    bot.send_message(m.chat.id, "🚀 حل ستوري انستا بجودة HD | سريع - آمن - بدون اعلانات\n\n📩 ابعت رابط الستوري او التيك توك\n\n@Storiesa6d_bot")
+        return member.status in {
+            "member",
+            "administrator",
+            "creator",
+        }
+    except Exception as error:
+        print(f"Subscription check failed: {error}")
+        return False
 
-@bot.callback_query_handler(func=lambda c: c.data == "check_sub")
-def check(c):
-    if is_subscribed(c.from_user.id):
-        bot.delete_message(c.message.chat.id, c.message.message_id)
-        bot.send_message(c.message.chat.id, "✅ تم الاشتراك بنجاح! ابعت رابط الفيديو هلق")
-    else:
-        bot.answer_callback_query(c.id, "❌ لسا ما اشتركت في @BotKanal24", show_alert=True)
 
-@bot.message_handler(func=lambda m: True)
-def handle(m):
-    if not is_subscribed(m.from_user.id):
-        bot.send_message(m.chat.id, f"❌ لازم تشترك اولاً: {CHANNEL}")
-        return
+def send_subscription_message(chat_id):
+    markup = telebot.types.InlineKeyboardMarkup()
 
-    url = m.text.strip()
-    if not url.startswith("http"):
-        bot.send_message(m.chat.id, "❌ ابعت رابط صحيح يبدأ بـ https://")
-        return
-
-    wait = bot.send_message(m.chat.id, "⚡️ ثانية... جاري التحميل بدون علامة")
-
-    try:
-        # أهم خطوة: نحل الرابط القصير يلي كان يسبب الخطأ بالصورة
-        if "vm.tiktok.com" in url or "vt.tiktok.com" in url or "vm.tiktok" in url:
-            url = expand_url(url)
-
-        with yt_dlp.YoutubeDL(YDL_OPTS_VIDEO) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-
-        # نرسل الفيديو
-        with open(filename, 'rb') as f:
-            bot.send_video(m.chat.id, f, caption="✅ بدون علامة\n📢 @BotKanal24", supports_streaming=True)
-
-        os.remove(filename)
-        bot.delete_message(m.chat.id, wait.message_id)
-
-    except Exception as e:
-        print(f"Error: {e}")
-        bot.edit_message_text(
-            "❌ ما قدرت حمل هاد الرابط\n\n"
-            "اذا تيك توك:\n"
-            "1- افتح الفيديو بتيك توك\n"
-            "2- اضغط مشاركة > نسخ الرابط\n"
-            "3- ارجع ابعتو هون (لازم يكون رابط طويل فيه /video/)\n\n"
-            "اذا انستا ستوري لازم يكون الحساب عام",
-            m.chat.id, wait.message_id
+    markup.add(
+        telebot.types.InlineKeyboardButton(
+            "📢 اشترك في القناة",
+            url=CHANNEL_LINK,
         )
-        # حاول تنظيف الملف لو موجود
+    )
+
+    markup.add(
+        telebot.types.InlineKeyboardButton(
+            "✅ تحققت",
+            callback_data="check_sub",
+        )
+    )
+
+    bot.send_message(
+        chat_id,
+        "🚀 أهلاً بك في بوت تحميل الفيديوهات!\n\n"
+        "لاستخدام البوت، اشترك أولاً في قناتنا الرسمية:\n"
+        f"{CHANNEL}\n\n"
+        "بعد الاشتراك اضغط على «تحققت».",
+        reply_markup=markup,
+    )
+
+
+# =========================
+# صفحة فحص Render
+# =========================
+
+@app.route("/")
+def home():
+    return "Storiesa6d_bot is Running!", 200
+
+
+@app.route("/health")
+def health():
+    return {"status": "ok"}, 200
+
+
+# =========================
+# أوامر البوت
+# =========================
+
+@bot.message_handler(commands=["start", "help"])
+def start(message):
+    if not is_subscribed(message.from_user.id):
+        send_subscription_message(message.chat.id)
+        return
+
+    bot.send_message(
+        message.chat.id,
+        "🚀 أهلاً بك في بوت التحميل السريع!\n\n"
+        "📥 المنصات المدعومة:\n"
+        "• TikTok\n"
+        "• Instagram\n"
+        "• Facebook\n\n"
+        "أرسل رابط فيديو عام وسأحاول تحميله "
+        "بأفضل جودة متاحة.\n\n"
+        "⚠️ بعض الروابط الخاصة أو المحمية قد لا تعمل.\n\n"
+        "@Storiesa6d_bot",
+    )
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data == "check_sub"
+)
+def check_subscription(call):
+    if is_subscribed(call.from_user.id):
+        bot.answer_callback_query(
+            call.id,
+            "✅ تم التحقق من الاشتراك",
+        )
+
         try:
-            if 'filename' in locals() and os.path.exists(filename):
-                os.remove(filename)
-        except:
+            bot.delete_message(
+                call.message.chat.id,
+                call.message.message_id,
+            )
+        except Exception:
             pass
 
-def run_bot():
-    bot.infinity_polling()
+        bot.send_message(
+            call.message.chat.id,
+            "✅ أهلاً بك! أرسل رابط الفيديو الآن.",
+        )
+    else:
+        bot.answer_callback_query(
+            call.id,
+            "❌ تعذّر التحقق. تأكد من الاشتراك وحاول مجدداً.",
+            show_alert=True,
+        )
 
-def run_web():
+
+# =========================
+# العثور على الملف الناتج
+# =========================
+
+def find_video_file(folder, info):
+    # نستخدم المسار الذي يعيده yt-dlp أولاً
+    candidates = []
+
+    for key in ("filepath", "_filename"):
+        path = info.get(key)
+
+        if path and os.path.isfile(path):
+            candidates.append(path)
+
+    # بعض المنصات أو المعالجات قد تغيّر امتداد الملف
+    for item in info.get("requested_downloads") or []:
+        path = item.get("filepath")
+
+        if path and os.path.isfile(path):
+            candidates.append(path)
+
+    # البحث داخل المجلد المؤقت عند اختلاف المسار
+    for path in glob.glob(os.path.join(folder, "*")):
+        if os.path.isfile(path):
+            candidates.append(path)
+
+    valid_files = []
+
+    for path in set(candidates):
+        if os.path.splitext(path)[1].lower() in VIDEO_EXTENSIONS:
+            if not path.endswith((".part", ".ytdl")):
+                valid_files.append(path)
+
+    if not valid_files:
+        raise FileNotFoundError("Downloaded video file not found")
+
+    return max(valid_files, key=os.path.getsize)
+
+
+# =========================
+# تحميل الفيديو وإرساله
+# =========================
+
+@bot.message_handler(
+    content_types=["text"],
+    func=lambda message: not (
+        message.text or ""
+    ).startswith("/")
+)
+def handle_video(message):
+    if not is_subscribed(message.from_user.id):
+        send_subscription_message(message.chat.id)
+        return
+
+    url = (message.text or "").strip()
+
+    if not is_supported_url(url):
+        bot.reply_to(
+            message,
+            "❌ أرسل رابط فيديو صحيحاً من TikTok "
+            "أو Instagram أو Facebook.",
+        )
+        return
+
+    url = expand_url(url)
+
+    if not is_supported_url(url):
+        bot.reply_to(message, "❌ هذا الرابط غير مدعوم.")
+        return
+
+    wait = bot.send_message(
+        message.chat.id,
+        "⏳ جارٍ تحميل الفيديو بأفضل جودة متاحة...",
+    )
+
+    try:
+        # مجلد مستقل لكل عملية لتجنب اختلاط الملفات
+        with tempfile.TemporaryDirectory(
+            prefix="stories_download_"
+        ) as temp_dir:
+
+            options = dict(YDL_OPTS_VIDEO)
+            options["outtmpl"] = os.path.join(
+                temp_dir,
+                "%(id)s.%(ext)s",
+            )
+
+            with yt_dlp.YoutubeDL(options) as downloader:
+                info = downloader.extract_info(
+                    url,
+                    download=True,
+                )
+
+            filename = find_video_file(temp_dir, info)
+            size = os.path.getsize(filename)
+
+            if size == 0:
+                raise RuntimeError("Downloaded file is empty")
+
+            if size > MAX_UPLOAD_SIZE:
+                bot.edit_message_text(
+                    "❌ تم تنزيل الفيديو، لكن حجمه أكبر "
+                    "من الحد المسموح للرفع عبر البوت.\n"
+                    "جرّب رابطاً بجودة أو حجم أقل.",
+                    message.chat.id,
+                    wait.message_id,
+                )
+                return
+
+            title = info.get("title") or "Video"
+            caption = (
+                f"✅ {title[:700]}\n"
+                "📢 @BotKanal24"
+            )
+
+            with open(filename, "rb") as video:
+                bot.send_video(
+                    message.chat.id,
+                    video,
+                    caption=caption,
+                    supports_streaming=True,
+                    timeout=120,
+                )
+
+        # TemporaryDirectory ينظف الملفات تلقائياً
+        try:
+            bot.delete_message(
+                message.chat.id,
+                wait.message_id,
+            )
+        except Exception:
+            pass
+
+    except Exception as error:
+        print(f"Download error: {type(error).__name__}: {error}")
+
+        try:
+            bot.edit_message_text(
+                "❌ لم أتمكن من تحميل هذا الرابط.\n\n"
+                "تأكد من أن الرابط صحيح وأن الفيديو متاح للعامة.\n"
+                "قد تتطلب بعض الروابط تسجيل الدخول، "
+                "أو قد تكون المنصة قد غيّرت طريقة الوصول للفيديو.\n\n"
+                "جرّب تحديث البوت أو إرسال رابط آخر.",
+                message.chat.id,
+                wait.message_id,
+            )
+        except Exception:
+            try:
+                bot.send_message(
+                    message.chat.id,
+                    "❌ فشل التحميل. جرّب رابطاً آخر.",
+                )
+            except Exception:
+                pass
+
+
+# =========================
+# تشغيل البوت وخادم الويب
+# =========================
+
+def run_bot():
+    bot.infinity_polling(
+        skip_pending=True,
+        timeout=30,
+        long_polling_timeout=25,
+    )
+
+
+if __name__ == "__main__":
+    threading.Thread(
+        target=run_bot,
+        daemon=True,
+    ).start()
+
     port = int(os.environ.get("PORT", 10000))
-    app.run
+
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        threaded=True,
+    )
