@@ -1,4 +1,4 @@
-import os, requests, telebot, threading, urllib.parse
+import os, requests, telebot, threading
 from flask import Flask
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -7,60 +7,73 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Live - Proxy Fix"
+    return "Bot Live - Cobalt Fix"
+
+def expand_url(url):
+    try:
+        r = requests.get(url, headers={"User-Agent":"Mozilla/5.0"}, allow_redirects=True, timeout=10)
+        return r.url
+    except:
+        return url
 
 def get_video(url):
-    # نلف الطلب عبر allorigins عشان يطلع من IP تاني مو IP تبع Render
-    try:
-        api_url = f"https://api.tiklydown.eu.org/api/download?url={url}"
-        proxy_url = f"https://api.allorigins.win/raw?url={urllib.parse.quote(api_url)}"
-        
-        r = requests.get(proxy_url, timeout=25).json()
-        print(f"proxy response: {r}")
-        
-        if r.get("video", {}).get("noWatermark"):
-            return r["video"]["noWatermark"]
-        if r.get("video", {}).get("watermark"):
-            return r["video"]["watermark"]
-    except Exception as e:
-        print(f"proxy fail: {e}")
+    full_url = expand_url(url)
+    print(f"vm expanded: {url} -> {full_url}")
 
-    # fallback مباشر
+    # 1. cobalt - بيشتغل من Render حتى لو tikwm محظور
     try:
-        r = requests.get(f"https://api.tiklydown.eu.org/api/download?url={url}", timeout=20).json()
-        if r.get("video", {}).get("noWatermark"):
-            return r["video"]["noWatermark"]
-    except:
-        pass
+        r = requests.post(
+            "https://api.cobalt.tools/api/json",
+            json={"url": full_url},
+            headers={"Accept":"application/json", "Content-Type":"application/json"},
+            timeout=20
+        ).json()
+        print(f"cobalt: {r}")
+        if r.get("url"):
+            return r["url"]
+        if r.get("status") == "stream" and r.get("url"):
+            return r["url"]
+    except Exception as e:
+        print(f"cobalt fail: {e}")
+
+    # 2. fallback tikwm
+    try:
+        r = requests.post("https://www.tikwm.com/api/", json={"url": full_url, "hd":1}, timeout=15).json()
+        if r.get("data",{}).get("play"):
+            return r["data"]["play"]
+    except Exception as e:
+        print(f"tikwm fail {e}")
 
     return None
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    bot.reply_to(m, "✅ البوت رجع يشتغل مع Proxy\nابعت رابط vm 📥\n@Storiesa6d_bot")
+    bot.reply_to(m, "✅ تم الاصلاح - ابعت رابط vm او www 📥\n@Storiesa6d_bot")
 
-@bot.message_handler(func=lambda x: True)
+@bot.message_handler(func=lambda m: True)
 def handle(m):
-    url = m.text.strip()
-    if "tiktok.com" not in url:
+    text = m.text.strip().split()[0]
+    if "tiktok.com" not in text:
         return
-    wait = bot.send_message(m.chat.id, "⏳ عم جيب من Proxy...")
+    wait = bot.send_message(m.chat.id, "⏳ عم فك رابط vm...")
     try:
-        video_url = get_video(url)
+        video_url = get_video(text)
         if not video_url:
-            raise Exception("حتى الـ Proxy انحظر - لازم ننقل لـ Fly.io")
-        bot.send_video(m.chat.id, video_url, caption="✅ تم @Storiesa6d_bot")
+            raise Exception("الرابط ما انقرا - ابعتلي الرابط الكامل www مو vm")
+        bot.send_video(m.chat.id, video_url, caption="✅ بدون علامة\n@Storiesa6d_bot")
         bot.delete_message(m.chat.id, wait.message_id)
     except Exception as e:
         bot.edit_message_text(f"❌ {e}", m.chat.id, wait.message_id)
 
 def run_bot():
     while True:
-        try: bot.infinity_polling(skip_pending=True)
-        except: continue
+        try:
+            bot.infinity_polling(skip_pending=True)
+        except:
+            continue
 
 def run_web():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+    app.run(host='0.0.0.0', port=int(os.getenv("PORT", 10000)))
 
 if __name__ == "__main__":
     threading.Thread(target=run_bot, daemon=True).start()
