@@ -5,68 +5,56 @@ TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-WORKER = "https://summer-meadow-a7b5.abdio33aaaa.workers.dev"
-
 @app.route('/')
 def home():
-    return "Bot Live"
+    return "Bot is Live"
 
-def expand_url(url):
+def expand(url):
     try:
-        r = requests.get(f"{WORKER}?url={url}", timeout=15)
-        txt = r.text.strip()
-        if txt.startswith("https://"):
-            print(f"expanded: {url} -> {txt}")
-            return txt
-    except Exception as e:
-        print(f"worker error: {e}")
-    try:
-        r = requests.get(url, headers={"User-Agent":"Mozilla/5.0"}, allow_redirects=True, timeout=10)
+        r = requests.get(url, headers={"User-Agent":"Mozilla/5.0"}, allow_redirects=True, timeout=15)
         return r.url
     except:
         return url
 
-def get_video(url):
-    full_url = expand_url(url)
-    print(f"final url: {full_url}")
+def get_video(tiktok_url):
     try:
-        j = requests.post(
-            "https://api.cobalt.tools/api/json",
-            json={"url": full_url},
-            headers={"Accept":"application/json","Content-Type":"application/json"},
-            timeout=20
-        ).json()
-        print(f"cobalt: {j}")
-        if j.get("url"):
-            return j["url"]
-    except Exception as e:
-        print(f"cobalt fail: {e}")
+        url = expand(tiktok_url)
+        # Try cobalt
+        data = requests.post("https://api.cobalt.tools/api/json", json={"url": url}, headers={"Accept":"application/json","Content-Type":"application/json"}, timeout=15).json()
+        if data.get("url"):
+            return data["url"]
+    except:
+        pass
     try:
-        j = requests.post("https://www.tikwm.com/api/", json={"url": full_url, "hd":1}, timeout=15).json()
-        if j.get("data",{}).get("play"):
-            return j["data"]["play"]
-    except Exception as e:
-        print(f"tikwm fail: {e}")
+        data = requests.post("https://co.wuk.sh/api/json", json={"url": url}, headers={"Accept":"application/json","Content-Type":"application/json"}, timeout=15).json()
+        if data.get("url"):
+            return data["url"]
+    except:
+        pass
+    try:
+        data = requests.post("https://www.tikwm.com/api/", json={"url": url, "hd":1}, timeout=15).json()
+        if data.get("data",{}).get("play"):
+            return data["data"]["play"]
+    except:
+        pass
     return None
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    bot.reply_to(m, "Bot works, send tiktok link")
+    bot.reply_to(m, "ابعتلي رابط تيك توك قصير وانا بجيبلك الفيديو")
 
 @bot.message_handler(func=lambda m: True)
 def handle(m):
     text = m.text.strip().split()[0]
-    if "tiktok.com" not in text:
+    if "tiktok.com" not in text and "vt.tiktok" not in text:
         return
-    wait = bot.send_message(m.chat.id, "Wait...")
-    try:
-        video_url = get_video(text)
-        if not video_url:
-            raise Exception("cant get video")
-        bot.send_video(m.chat.id, video_url, caption="@Storiesa6d_bot")
+    wait = bot.send_message(m.chat.id, "عم حاول جيب الفيديو...")
+    vurl = get_video(text)
+    if vurl:
+        bot.send_video(m.chat.id, vurl, caption="@Storiesa6d_bot")
         bot.delete_message(m.chat.id, wait.message_id)
-    except Exception as e:
-        bot.edit_message_text(f"Error: {e}", m.chat.id, wait.message_id)
+    else:
+        bot.edit_message_text("ما قدرت جيب الفيديو، جرب رابط تاني", m.chat.id, wait.message_id)
 
 def run_bot():
     while True:
