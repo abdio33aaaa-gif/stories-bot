@@ -1,6 +1,6 @@
 import os, requests, telebot, threading
 from flask import Flask
-import yt_dlp
+import re
 
 TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
@@ -11,30 +11,46 @@ def home():
     return "Bot Live"
 
 def get_video(url):
-    # 1- جرب بـ yt-dlp (أقوى شي)
+    # TikWM يقبل vm.tiktok مباشرة وبيفكها على سيرفره هو
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Referer": "https://www.tikwm.com/",
+        "Accept": "application/json"
+    }
+    payload = {
+        "url": url,
+        "count": 12,
+        "cursor": 0,
+        "web": 1,
+        "hd": 1
+    }
     try:
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'format': 'best',
-            'noplaylist': True,
-            'user_agent': 'Mozilla/5.0'
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            # فيديو مباشر
-            if 'url' in info:
-                return info['url']
-            if 'formats' in info and len(info['formats'])>0:
-                return info['formats'][-1]['url']
-            if 'entries' in info:
-                return info['entries'][0]['url']
+        r = requests.post("https://www.tikwm.com/api/", json=payload, headers=headers, timeout=20)
+        data = r.json()
+        # data['data']['play'] هو رابط الفيديو
+        if data.get("code") == 0 and data.get("data"):
+            d = data["data"]
+            # فيديو عادي
+            if d.get("play"):
+                return d["play"]
+            # صور (سلايد)
+            if d.get("images"):
+                return d["images"]  # رح نرسل الصور
     except Exception as e:
-        print(f"yt-dlp error: {e}")
+        print(f"tikwm error: {e}")
 
-    # 2- جرب cobalt كـ احتياط
+    # احتياط 2: tiklydown
     try:
-        for api in ["https://api.cobalt.tools/api/json", "https://co.wuk.sh/api/json"]:
+        r = requests.get(f"https://api.tiklydown.eu.org/api/download?url={url}", timeout=15).json()
+        if r.get("video",{}).get("noWatermark"):
+            return r["video"]["noWatermark"]
+    except:
+        pass
+
+    # احتياط 3: cobalt
+    try:
+        for api in ["https://co.wuk.sh/api/json", "https://api.cobalt.tools/api/json"]:
             try:
                 j = requests.post(api, json={"url": url}, headers={"Accept":"application/json","Content-Type":"application/json"}, timeout=15).json()
                 if j.get("url"):
@@ -44,35 +60,35 @@ def get_video(url):
     except:
         pass
 
-    # 3- جرب tikwm
-    try:
-        j = requests.post("https://www.tikwm.com/api/", json={"url": url, "hd":1}, timeout=15).json()
-        if j.get("data",{}).get("play"):
-            return j["data"]["play"]
-    except:
-        pass
-
     return None
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    bot.reply_to(m, "ابعتلي رابط تيك توك قصير وانا بجيبلك الفيديو")
+    bot.reply_to(m, "ابعتلي رابط تيك توك حتى لو قصير vm.tiktok وانا بجيبلك ياه")
 
 @bot.message_handler(func=lambda m: True)
 def handle(m):
     text = m.text.strip().split()[0]
     if "tiktok.com" not in text:
         return
-    wait = bot.send_message(m.chat.id, "عم فك الرابط وجيب الفيديو...")
-    vurl = get_video(text)
-    if vurl:
-        try:
-            bot.send_video(m.chat.id, vurl, caption="@Storiesa6d_bot")
+    wait = bot.send_message(m.chat.id, "عم جيب الفيديو... ثانية")
+    result = get_video(text)
+    
+    if not result:
+        bot.edit_message_text("ما قدرت جيب الفيديو، جرب رابط تاني طويل", m.chat.id, wait.message_id)
+        return
+
+    try:
+        if isinstance(result, list): # صور
+            media = [telebot.types.InputMediaPhoto(p) for p in result[:10]]
+            bot.send_media_group(m.chat.id, media)
             bot.delete_message(m.chat.id, wait.message_id)
-        except:
-            bot.edit_message_text(f"جبت الرابط بس ما قدرت ارسلو كفيديو، هاد رابط التحميل:\n{vurl}", m.chat.id, wait.message_id)
-    else:
-        bot.edit_message_text("ما قدرت جيب الفيديو، تيك توك حاظر السيرفر جرب رابط تاني", m.chat.id, wait.message_id)
+        else: # فيديو
+            bot.send_video(m.chat.id, result, caption="@Storiesa6d_bot")
+            bot.delete_message(m.chat.id, wait.message_id)
+    except Exception as e:
+        # اذا فشل الارسال كفيديو، ابعت الرابط مباشر
+        bot.edit_message_text(f"جبت الفيديو، هاد رابط التحميل:\n{result if isinstance(result,str) else result[0]}", m.chat.id, wait.message_id)
 
 def run_bot():
     while True:
