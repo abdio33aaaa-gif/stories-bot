@@ -1,5 +1,6 @@
-import os, requests, telebot, threading, time
+import os, telebot, threading, time, glob
 from flask import Flask
+import yt_dlp
 
 TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
@@ -7,73 +8,51 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is Live!"
-
-# لستة بروكسيات مجانية - بيجربهم واحد واحد
-PROXIES = [
-    None,  # أول محاولة بدون بروكسي
-]
-
-def get_proxies():
-    try:
-        # بجيب بروكسيات مجانية لحظياً
-        r = requests.get("https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all", timeout=10).text
-        plist = r.strip().split('\r\n')[:5]
-        return [f"http://{p}" for p in plist if p]
-    except:
-        return []
-
-def get_tiktok(url):
-    # حل الرابط المختصر
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15'}
-        real = requests.get(url, allow_redirects=True, headers=headers, timeout=20).url
-    except:
-        real = url
-    
-    print(f"Real URL: {real}")
-
-    # جرب بدون بروكسي + مع بروكسيات
-    proxies_to_try = [None] + get_proxies()
-    
-    for proxy in proxies_to_try:
-        try:
-            prox_dict = {"http": proxy, "https": proxy} if proxy else None
-            print(f"Trying with proxy: {proxy}")
-            
-            res = requests.post("https://www.tikwm.com/api/", 
-                json={"url": real, "count":12, "cursor":0, "web":1, "hd":1},
-                headers={"User-Agent":"Mozilla/5.0"},
-                proxies=prox_dict,
-                timeout=25).json()
-                
-            if res.get("code") == 0 and res["data"].get("play"):
-                print(f"Success with {proxy}")
-                return res["data"]["play"]
-        except Exception as e:
-            print(f"Fail with {proxy}: {e}")
-            continue
-    return None
+    return "Bot Live - yt-dlp"
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    bot.reply_to(m, "🚀 أهلاً! أرسل رابط TikTok")
+    bot.reply_to(m, "🚀 ابعت رابط تيك توك - حتى لو vm.tiktok.com")
 
 @bot.message_handler(func=lambda m: True)
 def handle(m):
     url = m.text.strip()
     if "tiktok.com" not in url:
         return
-    wait = bot.reply_to(m, "⏳ عم حاول جيبه (مع بروكسي أمريكي)...")
-    video = get_tiktok(url)
-    if video:
-        try:
-            bot.send_video(m.chat.id, video, caption="✅")
-            bot.delete_message(m.chat.id, wait.message_id)
-        except:
-            bot.edit_message_text("❌ الفيديو كبير", m.chat.id, wait.message_id)
-    else:
-        bot.edit_message_text("❌ ما قدرت اجيبه", m.chat.id, wait.message_id)
+    
+    wait = bot.reply_to(m, "⏳ عم حمل الفيديو...")
+    
+    try:
+        # مسح ملفات قديمة
+        for f in glob.glob("/tmp/*.mp4"):
+            try: os.remove(f)
+            except: pass
+
+        ydl_opts = {
+            'outtmpl': '/tmp/%(id)s.%(ext)s',
+            'format': 'mp4/best[height<=720]/best',  # بيجيب 720p مو 1080 مشان الحجم
+            'quiet': True,
+            'no_warnings': True,
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            file_path = ydl.prepare_filename(info)
+            # لو نزل webm حول الاسم
+            if not os.path.exists(file_path):
+                file_path = glob.glob("/tmp/*.mp4")[0]
+        
+        print(f"Downloaded: {file_path} Size: {os.path.getsize(file_path)/1024/1024:.2f} MB")
+        
+        with open(file_path, 'rb') as video:
+            bot.send_video(m.chat.id, video, caption="✅ بدون علامة")
+        
+        bot.delete_message(m.chat.id, wait.message_id)
+        os.remove(file_path)
+        
+    except Exception as e:
+        print(f"Error: {e}")
+        bot.edit_message_text(f"❌ خطأ: {e}", m.chat.id, wait.message_id)
 
 def run_bot():
     while True:
