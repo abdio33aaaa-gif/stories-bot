@@ -13,12 +13,21 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Live - OK"
+    if not TOKEN:
+        return "BOT_TOKEN missing!"
+    try:
+        bot.remove_webhook()
+        time.sleep(1)
+        bot.set_webhook(url=WEBHOOK_URL + "/" + TOKEN)
+        return "Bot Live - OK - Webhook Set"
+    except Exception as e:
+        return "Error: " + str(e)
 
 @app.route('/' + TOKEN, methods=['POST'])
 def webhook():
     try:
-        update = telebot.types.Update.de_json(request.get_data().decode('utf-8'))
+        json_str = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_str)
         bot.process_new_updates([update])
     except:
         pass
@@ -43,13 +52,17 @@ def download_with_ytdlp(url):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         filename = ydl.prepare_filename(info)
-        if not os.path.exists(filename):
-            filename = "/tmp/video.mp4"
         return filename
+
+@bot.message_handler(commands=['start'])
+def start_cmd(m):
+    bot.reply_to(m, "جاهز ✅ ابعتلي رابط تيك توك او يوتيوب")
 
 @bot.message_handler(func=lambda m: True)
 def handle(m):
     try:
+        if not m.text:
+            return
         text = m.text.strip().split()[0]
         if not text.startswith("http"):
             return
