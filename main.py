@@ -8,9 +8,21 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://stories-bot-cqxg.onrender.com").
 bot = telebot.TeleBot(TOKEN, threaded=False)
 app = Flask(__name__)
 
+# === هاد السطر المهم لازم يكون هون برا ===
+def setup_webhook():
+    try:
+        bot.remove_webhook()
+        time.sleep(1)
+        bot.set_webhook(url=f"{WEBHOOK_URL}/{TOKEN}")
+        print(f"Webhook set to {WEBHOOK_URL}/{TOKEN}")
+    except Exception as e:
+        print(f"Webhook error: {e}")
+
+setup_webhook()  # <--- عم يتنفذ حتى مع gunicorn
+
 @app.route('/')
 def home():
-    return "Bot Live - Webhook"
+    return "Bot Live - Webhook OK"
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
@@ -32,8 +44,8 @@ def expand_vm_link(short_url):
         m = re.search(r'https://www\.tiktok\.com/@[^/]+/video/\d+', html)
         if m:
             return m.group(0)
-    except Exception as e:
-        print(f"expand fail: {e}")
+    except:
+        pass
     return short_url
 
 def get_video(original_url):
@@ -55,7 +67,7 @@ def get_video(original_url):
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    bot.reply_to(m, "جاهز ✅ ابعت رابط vm.tiktok جديد")
+    bot.reply_to(m, "جاهز ✅ ابعت رابط vm.tiktok")
 
 @bot.message_handler(func=lambda m: True)
 def handle(m):
@@ -71,11 +83,7 @@ def handle(m):
         except:
             bot.edit_message_text(v, m.chat.id, wait.message_id)
     else:
-        bot.edit_message_text("ما قدرت، جرب رابط جديد بعد دقيقة", m.chat.id, wait.message_id)
+        bot.edit_message_text("ما قدرت، جرب رابط جديد", m.chat.id, wait.message_id)
 
 if __name__ == "__main__":
-    bot.remove_webhook()
-    time.sleep(2)
-    bot.set_webhook(url=f"{WEBHOOK_URL}/{TOKEN}")
-    print(f"Webhook set to {WEBHOOK_URL}/{TOKEN}")
     app.run(host='0.0.0.0', port=int(os.getenv("PORT", 10000)))
