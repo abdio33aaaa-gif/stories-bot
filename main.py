@@ -1,21 +1,15 @@
 import os, requests, telebot, time, traceback
 from flask import Flask, request
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
+CHANNEL = "@BotKanal24"  # قناتك
 bot = telebot.TeleBot(TOKEN, threaded=False) if TOKEN else None
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    if not TOKEN: return "BOT_TOKEN missing!"
-    try:
-        bot.remove_webhook()
-        time.sleep(1)
-        bot.set_webhook(url=WEBHOOK_URL + "/" + TOKEN)
-        return "Bot Live - OK"
-    except Exception as e:
-        return "Error: " + str(e)
+    return "Bot Live - OK - with channel @BotKanal24"
 
 @app.route('/' + TOKEN, methods=['POST'])
 def webhook():
@@ -25,8 +19,15 @@ def webhook():
     except: pass
     return "ok", 200
 
+def is_subscribed(user_id):
+    try:
+        member = bot.get_chat_member(CHANNEL, user_id)
+        return member.status in ['creator', 'administrator', 'member']
+    except Exception as e:
+        print(f"check sub error: {e}")
+        return True  # اذا البوت مو ادمن بالقناة خليه يمشي مشان ما يعلق
+
 def get_yt_cobalt(url):
-    # نستخدم 2 سيرفرات cobalt اذا واحد محظور
     apis = ["https://co.wuk.sh/api/json", "https://api.cobalt.tools/api/json"]
     for api in apis:
         try:
@@ -36,7 +37,6 @@ def get_yt_cobalt(url):
             if not direct and j.get("picker"):
                 direct = j["picker"][0].get("url")
             if direct:
-                print("Cobalt got url: " + api)
                 video_data = requests.get(direct, headers={"User-Agent":"Mozilla/5.0"}, stream=True, timeout=60).content
                 path = "/tmp/yt.mp4"
                 with open(path, "wb") as f:
@@ -63,19 +63,39 @@ def get_with_ytdlp(url):
         info = ydl.extract_info(url, download=True)
         return ydl.prepare_filename(info)
 
-@bot.message_handler(commands=['start'])
+@bot.message_handler(commands=['start', 'check'])
 def start_cmd(m):
+    if not is_subscribed(m.from_user.id):
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("📢 اشترك بالقناة", url="https://t.me/BotKanal24"))
+        markup.add(InlineKeyboardButton("✅ تحققت - اشتركت", callback_data="check_sub"))
+        bot.send_message(m.chat.id, f"⚠️ لازم تشترك بقناتنا أولاً حتى تقدر تستخدم البوت\n\n👉 {CHANNEL}\n\nبعد الاشتراك اضغط تحققت", reply_markup=markup)
+        return
     bot.reply_to(m, "جاهز ✅ ابعتلي رابط")
+
+@bot.callback_query_handler(func=lambda c: c.data == "check_sub")
+def check_callback(call):
+    if is_subscribed(call.from_user.id):
+        bot.edit_message_text("تم الاشتراك ✅ جاهز ابعتلي رابط", call.message.chat.id, call.message.message_id)
+    else:
+        bot.answer_callback_query(call.id, "❌ لسا ما اشتركت، اشترك بالقناة اول", show_alert=True)
 
 @bot.message_handler(func=lambda m: True)
 def handle(m):
     try:
         if not m.text: return
+        # فحص الاشتراك اول شي
+        if not is_subscribed(m.from_user.id):
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("📢 اشترك بالقناة", url="https://t.me/BotKanal24"))
+            markup.add(InlineKeyboardButton("✅ تحققت - اشتركت", callback_data="check_sub"))
+            bot.send_message(m.chat.id, f"⚠️ لازم تشترك بقناتنا أولاً\n\n👉 {CHANNEL}", reply_markup=markup)
+            return
+
         text = m.text.strip().split()[0]
         if not text.startswith("http"): return
         wait = bot.send_message(m.chat.id, "⏳ عم حمل...")
         path = None
-
         if "youtu.be" in text or "youtube.com" in text:
             path = get_yt_cobalt(text)
             if not path:
@@ -83,13 +103,12 @@ def handle(m):
                     path = get_with_ytdlp(text)
                 except:
                     path = None
-
         else:
             path = get_with_ytdlp(text)
 
         if path and os.path.exists(path):
             with open(path, 'rb') as f:
-                bot.send_video(m.chat.id, f, caption="تم ✅")
+                bot.send_video(m.chat.id, f, caption="تم ✅ @BotKanal24")
             try: os.remove(path)
             except: pass
             bot.delete_message(m.chat.id, wait.message_id)
